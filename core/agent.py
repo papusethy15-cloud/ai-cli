@@ -72,7 +72,7 @@ No markdown.
         if not plan:
             print("[Agent] No valid plan returned")
             return
-
+        
         execute_plan(plan)
 
         print("\nStep finished\n")
