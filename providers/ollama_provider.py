@@ -1,18 +1,26 @@
 import requests
 
-OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+OLLAMA_URL = "http://localhost:11434/api/generate"
 
-def ask_llm(prompt, model="qwen2:1.5b"):
 
-    payload = {
+def ask_llm(prompt, model="deepseek-coder:6.7b"):
+
+    data = {
         "model": model,
         "prompt": prompt,
         "stream": False
     }
 
-    r = requests.post(OLLAMA_URL, json=payload)
-
-    if r.status_code != 200:
-        return "Error contacting Ollama"
+    r = requests.post(OLLAMA_URL, json=data)
 
     return r.json()["response"]
+
+
+def ask_planner(prompt):
+
+    return ask_llm(prompt, model="qwen2:1.5b")
+
+
+def ask_coder(prompt):
+
+    return ask_llm(prompt, model="deepseek-coder:6.7b")

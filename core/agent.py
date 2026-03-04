@@ -1,4 +1,4 @@
-from providers.ollama_provider import ask_llm
+from providers.ollama_provider import ask_coder
 from utils.project_scanner import scan_project
 from utils.file_writer import write_file
 from utils.file_editor import edit_file
@@ -8,106 +8,108 @@ import json
 import re
 
 
+MAX_STEPS = 5
+
+
 def run_agent():
 
     goal = input("What do you want to build or fix? > ")
 
-    files = scan_project(".")
+    for step in range(MAX_STEPS):
 
-    context = ""
+        print(f"\n===== AGENT STEP {step+1} =====\n")
 
-    for f in files:
-        context += f"\nFILE:{f['path']}\n{f['content']}\n"
+        files = scan_project(".")
 
-    prompt = f"""
-You are an autonomous coding agent.
+        context = ""
 
-User goal:
+        for f in files:
+            context += f"\nFILE:{f['path']}\n{f['content'][:500]}\n"
+
+        prompt = f"""
+You are an AI coding agent.
+
+Goal:
 {goal}
 
-Project files:
+Current project files:
 {context}
 
-You must return a JSON array of actions.
-
-Available actions:
-
-create_file(path,content)
-edit_file(path,content)
-run_shell(command)
+Return ONLY valid JSON.
 
 Example:
 
 [
-  {{
-    "action":"create_file",
-    "path":"hello.py",
-    "content":"print('hello world')"
-  }},
-  {{
-    "action":"run_shell",
-    "command":"python hello.py"
-  }}
+ {{
+  "action":"create_file",
+  "path":"numbers.py",
+  "content":"for i in range(1,6): print(i)"
+ }},
+ {{
+  "action":"run_shell",
+  "command":"python numbers.py"
+ }}
 ]
 
-Return ONLY JSON.
+Available actions:
+
+create_file
+edit_file
+run_shell
+
+Return JSON only.
 No explanation.
 No markdown.
 """
 
-    result = ask_llm(prompt)
+        result = ask_coder(prompt)
 
-    print("\nAI Output:\n")
-    print(result)
+        print("AI Output:\n")
+        print(result)
+
+        plan = parse_json(result)
+
+        if not plan:
+            print("[Agent] No valid plan returned")
+            return
+
+        execute_plan(plan)
+
+        print("\nStep finished\n")
+
+
+def parse_json(result):
 
     try:
-
-        plan = json.loads(result)
+        return json.loads(result)
 
     except:
 
-        # Try extracting JSON if the model added extra text
         match = re.search(r'\[.*\]', result, re.S)
 
         if match:
             try:
-                plan = json.loads(match.group())
+                return json.loads(match.group())
             except:
-                print("[Agent] JSON parsing failed")
-                fallback(goal)
-                return
-        else:
-            fallback(goal)
-            return
+                return None
+
+        return None
+
+
+def execute_plan(plan):
 
     for step in plan:
 
         action = step.get("action")
 
         if action == "create_file":
+
             write_file(step["path"], step["content"])
 
         elif action == "edit_file":
+
             edit_file(step["path"], step["content"])
 
         elif action == "run_shell":
+
             run_shell(step["command"])
-
-
-def fallback(goal):
-
-    print("[Agent] Using fallback planner")
-
-    goal = goal.lower()
-
-    if "create" in goal and ".py" in goal:
-
-        words = goal.split()
-
-        for w in words:
-            if ".py" in w:
-
-                filename = w
-
-                write_file(filename, "print('hello world')")
-                return
