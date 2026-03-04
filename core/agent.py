@@ -1,9 +1,12 @@
 from providers.ollama_provider import ask_llm
 from utils.project_scanner import scan_project
 from utils.file_writer import write_file
+from utils.file_editor import edit_file
+from utils.shell_runner import run_shell
 
 import json
 import re
+
 
 def run_agent():
 
@@ -17,23 +20,39 @@ def run_agent():
         context += f"\nFILE:{f['path']}\n{f['content']}\n"
 
     prompt = f"""
-You are an autonomous software engineer.
+You are an autonomous coding agent.
 
 User goal:
 {goal}
 
-Return ONLY JSON like this:
+Project files:
+{context}
+
+You must return a JSON array of actions.
+
+Available actions:
+
+create_file(path,content)
+edit_file(path,content)
+run_shell(command)
+
+Example:
 
 [
   {{
-    "action": "create_file",
-    "path": "hello.py",
-    "content": "print('hello world')"
+    "action":"create_file",
+    "path":"hello.py",
+    "content":"print('hello world')"
+  }},
+  {{
+    "action":"run_shell",
+    "command":"python hello.py"
   }}
 ]
 
-Do not explain anything.
-Return only JSON.
+Return ONLY JSON.
+No explanation.
+No markdown.
 """
 
     result = ask_llm(prompt)
@@ -41,28 +60,54 @@ Return only JSON.
     print("\nAI Output:\n")
     print(result)
 
-    # Try normal JSON parsing first
     try:
 
         plan = json.loads(result)
 
     except:
 
-        # Try extracting JSON block if model added extra text
+        # Try extracting JSON if the model added extra text
         match = re.search(r'\[.*\]', result, re.S)
 
         if match:
             try:
                 plan = json.loads(match.group())
             except:
-                print("\n[Agent] Could not parse JSON")
+                print("[Agent] JSON parsing failed")
+                fallback(goal)
                 return
         else:
-            print("\n[Agent] No JSON found in response")
+            fallback(goal)
             return
 
     for step in plan:
 
-        if step["action"] == "create_file":
+        action = step.get("action")
 
+        if action == "create_file":
             write_file(step["path"], step["content"])
+
+        elif action == "edit_file":
+            edit_file(step["path"], step["content"])
+
+        elif action == "run_shell":
+            run_shell(step["command"])
+
+
+def fallback(goal):
+
+    print("[Agent] Using fallback planner")
+
+    goal = goal.lower()
+
+    if "create" in goal and ".py" in goal:
+
+        words = goal.split()
+
+        for w in words:
+            if ".py" in w:
+
+                filename = w
+
+                write_file(filename, "print('hello world')")
+                return
