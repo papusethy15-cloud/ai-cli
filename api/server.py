@@ -6,14 +6,30 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
-from config import API_HOST, API_KEY, API_PORT
+from config import (
+    API_HOST,
+    API_PORT,
+    MAX_CONCURRENT_JOBS,
+    MAX_JOB_EVENTS,
+    MAX_JOB_HISTORY,
+    WORKSPACE_ROOT,
+)
+from services.auth_service import (
+    AuthContext,
+    AuthError,
+    authenticate_api_key,
+    has_scope,
+    whoami_payload,
+)
 from services.agent_service import run_agent_goal
+from services.device_auth_service import device_auth_service
 from services.analyze_service import run_analysis
 from services.fix_service import run_file_fix, run_project_fix
 from services.memory_service import clear_memory, get_memory_entries, get_memory_stats
+from utils.path_guard import WorkspacePathError, resolve_in_workspace
 
 try:
-    from fastapi import Depends, FastAPI, Header, HTTPException
+    from fastapi import Depends, FastAPI, Header, HTTPException, Request
     from fastapi.responses import StreamingResponse
     from pydantic import BaseModel, Field
 except Exception as e:  # pragma: no cover
@@ -48,10 +64,38 @@ class MemoryClearRequest(BaseModel):
 
 class AgentRequest(BaseModel):
     goal: str = Field(..., min_length=1)
+    workspace_path: Optional[str] = None
     project_details: Optional[Dict[str, str]] = None
     max_steps: Optional[int] = None
     auto_plan: bool = True
     async_mode: bool = False
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+class DeviceStartRequest(BaseModel):
+    client_name: str = "aicli"
+
+
+class DeviceVerifyRequest(BaseModel):
+    user_code: str = Field(..., min_length=1)
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
+class DeviceTokenRequest(BaseModel):
+    device_code: str = Field(..., min_length=1)
 
 
 @dataclass
@@ -62,6 +106,9 @@ class JobStore:
     def create(self, payload: Dict[str, Any]) -> str:
         job_id = str(uuid.uuid4())
         with self._lock:
+            while len(self._jobs) >= max(1, MAX_JOB_HISTORY):
+                oldest_job_id = next(iter(self._jobs))
+                del self._jobs[oldest_job_id]
             self._jobs[job_id] = {
                 "id": job_id,
                 "status": "queued",
@@ -112,6 +159,10 @@ class JobStore:
                 "event": event,
             }
         )
+        if len(job["events"]) > max(1, MAX_JOB_EVENTS):
+            overflow = len(job["events"]) - max(1, MAX_JOB_EVENTS)
+            if overflow > 0:
+                job["events"] = job["events"][overflow:]
 
     def add_event(self, job_id: str, event: Dict[str, Any]):
         with self._lock:
@@ -127,14 +178,64 @@ class JobStore:
 
 
 job_store = JobStore()
+job_semaphore = threading.Semaphore(max(1, MAX_CONCURRENT_JOBS))
 
 
-def _auth_guard(x_api_key: Optional[str] = Header(default=None)):
-    if API_KEY and x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API key.")
+def _auth_guard(
+    authorization: Optional[str] = Header(default=None),
+    x_api_key: Optional[str] = Header(default=None),
+) -> AuthContext:
+    auth_header = authorization if isinstance(authorization, str) else None
+    api_key_header = x_api_key if isinstance(x_api_key, str) else None
+    bearer_token = None
+    if auth_header and auth_header.lower().startswith("bearer "):
+        bearer_token = auth_header[7:].strip()
+    if bearer_token:
+        try:
+            return device_auth_service.authenticate_access_token(bearer_token)
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    try:
+        return authenticate_api_key(api_key_header)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+
+def _require_scope(scope: str):
+    def _inner(context: AuthContext = Depends(_auth_guard)) -> AuthContext:
+        if not has_scope(context, scope):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Missing required scope '{scope}'.",
+            )
+        return context
+
+    return _inner
+
+
+def _safe_path(
+    path: str,
+    *,
+    require_exists=False,
+    require_file=False,
+    require_dir=False,
+) -> str:
+    return resolve_in_workspace(
+        path,
+        workspace_root=WORKSPACE_ROOT,
+        require_exists=require_exists,
+        require_file=require_file,
+        require_dir=require_dir,
+    )
 
 
 def _run_agent_job(job_id: str, request: AgentRequest):
+    acquired = job_semaphore.acquire(blocking=False)
+    if not acquired:
+        job_store.add_event(job_id, {"type": "job_waiting_for_slot"})
+        job_semaphore.acquire()
+
     job_store.start(job_id)
     try:
         def on_event(event: Dict[str, Any]):
@@ -146,31 +247,124 @@ def _run_agent_job(job_id: str, request: AgentRequest):
             max_steps=request.max_steps,
             auto_plan=request.auto_plan,
             on_event=on_event,
+            workspace_path=request.workspace_path or ".",
         )
         job_store.finish(job_id, result)
     except Exception as e:  # pragma: no cover
         job_store.fail(job_id, str(e))
+    finally:
+        job_semaphore.release()
+
+
+def _can_access_job(job: Dict[str, Any], context: AuthContext) -> bool:
+    payload = job.get("payload", {})
+    if not isinstance(payload, dict):
+        return True
+    meta = payload.get("_meta", {})
+    if not isinstance(meta, dict):
+        return True
+    owner = str(meta.get("owner_user_id", "")).strip()
+    if not owner:
+        return True
+    if has_scope(context, "*"):
+        return True
+    return owner == context.user_id
 
 
 def create_app():
     app = FastAPI(title="AI CLI API", version="1.0.0")
 
+    @app.post("/auth/login")
+    def auth_login(request: LoginRequest):
+        try:
+            return device_auth_service.login_password(
+                username=request.username,
+                password=request.password,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    @app.post("/auth/device/start")
+    def auth_device_start(request: DeviceStartRequest, raw_request: Request):
+        base_url = str(raw_request.base_url).rstrip("/")
+        try:
+            return device_auth_service.start_device_authorization(
+                client_name=request.client_name,
+                base_url=base_url,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    @app.post("/auth/device/verify")
+    def auth_device_verify(request: DeviceVerifyRequest):
+        try:
+            return device_auth_service.approve_device_code(
+                user_code=request.user_code,
+                username=request.username,
+                password=request.password,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    @app.post("/auth/device/token")
+    def auth_device_token(request: DeviceTokenRequest):
+        try:
+            return device_auth_service.poll_device_token(
+                device_code=request.device_code,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    @app.post("/auth/refresh")
+    def auth_refresh(request: RefreshRequest):
+        try:
+            return device_auth_service.refresh_access_token(
+                refresh_token=request.refresh_token,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
+    @app.post("/auth/logout")
+    def auth_logout(request: LogoutRequest):
+        try:
+            return device_auth_service.revoke_refresh_token(
+                refresh_token=request.refresh_token,
+            )
+        except AuthError as e:
+            raise HTTPException(status_code=e.status_code, detail=e.message) from None
+
     @app.get("/health")
-    def health(_: None = Depends(_auth_guard)):
-        return {"ok": True, "status": "healthy"}
+    def health(_: AuthContext = Depends(_require_scope("read"))):
+        return {"ok": True, "status": "healthy", "workspace_root": WORKSPACE_ROOT}
+
+    @app.get("/auth/whoami")
+    def whoami(context: AuthContext = Depends(_auth_guard)):
+        return whoami_payload(context)
 
     @app.post("/analyze")
-    def analyze(request: AnalyzeRequest, _: None = Depends(_auth_guard)):
-        return run_analysis(request.path, use_llm=request.use_llm, refresh=request.refresh)
+    def analyze(request: AnalyzeRequest, _: AuthContext = Depends(_require_scope("read"))):
+        try:
+            safe_path = _safe_path(request.path, require_exists=True)
+        except WorkspacePathError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        return run_analysis(safe_path, use_llm=request.use_llm, refresh=request.refresh)
 
     @app.post("/fix/file")
-    def fix_file(request: FixFileRequest, _: None = Depends(_auth_guard)):
-        return run_file_fix(request.path, apply=request.apply, refresh=request.refresh)
+    def fix_file(request: FixFileRequest, _: AuthContext = Depends(_require_scope("write"))):
+        try:
+            safe_path = _safe_path(request.path, require_exists=True, require_file=True)
+        except WorkspacePathError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        return run_file_fix(safe_path, apply=request.apply, refresh=request.refresh)
 
     @app.post("/fix/project")
-    def fix_project(request: FixProjectRequest, _: None = Depends(_auth_guard)):
+    def fix_project(request: FixProjectRequest, _: AuthContext = Depends(_require_scope("write"))):
+        try:
+            safe_path = _safe_path(request.path, require_exists=True, require_dir=True)
+        except WorkspacePathError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
         return run_project_fix(
-            request.path,
+            safe_path,
             apply=request.apply,
             use_llm=request.use_llm,
             refresh=request.refresh,
@@ -178,48 +372,79 @@ def create_app():
         )
 
     @app.get("/memory/stats")
-    def memory_stats(_: None = Depends(_auth_guard)):
+    def memory_stats(_: AuthContext = Depends(_require_scope("read"))):
         return {"ok": True, "stats": get_memory_stats()}
 
     @app.get("/memory/show")
-    def memory_show(limit: int = 20, _: None = Depends(_auth_guard)):
+    def memory_show(limit: int = 20, _: AuthContext = Depends(_require_scope("read"))):
         return {"ok": True, "entries": get_memory_entries(limit=limit)}
 
     @app.delete("/memory")
-    def memory_clear(request: MemoryClearRequest, _: None = Depends(_auth_guard)):
+    def memory_clear(request: MemoryClearRequest, _: AuthContext = Depends(_require_scope("write"))):
         return clear_memory(yes=request.yes)
 
     @app.post("/agent/run")
-    def agent_run(request: AgentRequest, _: None = Depends(_auth_guard)):
+    def agent_run(request: AgentRequest, context: AuthContext = Depends(_require_scope("agent"))):
+        try:
+            safe_workspace = _safe_path(
+                request.workspace_path or ".",
+                require_exists=True,
+                require_dir=True,
+            )
+        except WorkspacePathError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+
         if not request.async_mode:
             return run_agent_goal(
                 request.goal,
                 project_details=request.project_details,
                 max_steps=request.max_steps,
                 auto_plan=request.auto_plan,
+                workspace_path=safe_workspace,
             )
 
-        job_id = job_store.create(request.model_dump())
+        request.workspace_path = safe_workspace
+        payload = request.model_dump()
+        payload["_meta"] = {"owner_user_id": context.user_id}
+        job_id = job_store.create(payload)
         worker = threading.Thread(target=_run_agent_job, args=(job_id, request), daemon=True)
         worker.start()
         return {"ok": True, "job_id": job_id, "status": "queued"}
 
     @app.get("/jobs/{job_id}")
-    def job_status(job_id: str, _: None = Depends(_auth_guard)):
+    def job_status(job_id: str, context: AuthContext = Depends(_require_scope("read"))):
         job = job_store.get(job_id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found.")
+        if not _can_access_job(job, context):
+            raise HTTPException(status_code=403, detail="You do not have access to this job.")
         return {"ok": True, "job": job}
 
     @app.get("/jobs/{job_id}/events")
-    def job_events(job_id: str, since: int = 0, max_items: int = 100, _: None = Depends(_auth_guard)):
+    def job_events(
+        job_id: str,
+        since: int = 0,
+        max_items: int = 100,
+        context: AuthContext = Depends(_require_scope("read")),
+    ):
+        job = job_store.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        if not _can_access_job(job, context):
+            raise HTTPException(status_code=403, detail="You do not have access to this job.")
         events = job_store.get_events(job_id, since=since, max_items=max_items)
         if events is None:
             raise HTTPException(status_code=404, detail="Job not found.")
         return {"ok": True, "events": events}
 
     @app.get("/jobs/{job_id}/stream")
-    def job_stream(job_id: str, since: int = 0, _: None = Depends(_auth_guard)):
+    def job_stream(job_id: str, since: int = 0, context: AuthContext = Depends(_require_scope("read"))):
+        job = job_store.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found.")
+        if not _can_access_job(job, context):
+            raise HTTPException(status_code=403, detail="You do not have access to this job.")
+
         def event_generator():
             last_seq = since
             idle_rounds = 0

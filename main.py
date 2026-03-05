@@ -7,6 +7,12 @@ from commands.fix_project import fix_project
 from commands.api import serve_api
 from commands.memory import memory_command
 from commands.remote import (
+    remote_config_show,
+    remote_device_login,
+    remote_login,
+    remote_logout,
+    remote_password_login,
+    remote_token_refresh,
     remote_agent_run,
     remote_analyze,
     remote_fix_file,
@@ -16,6 +22,7 @@ from commands.remote import (
     remote_job_stream,
     remote_job,
     remote_memory,
+    remote_whoami,
 )
 from commands.analyze import analyze
 from core.agent import run_agent
@@ -80,12 +87,114 @@ def serve_api_server():
     serve_api()
 
 
+@app.command("setup")
+def setup_cli(
+    mode: str = "device",
+    base_url: str = "",
+    api_key: str = "",
+    username: str = "",
+):
+    choice = mode.strip().lower()
+    if choice in {"device", "oauth", "device-code"}:
+        remote_device_login(
+            base_url=base_url or None,
+            username=username or None,
+            save=True,
+        )
+        return
+    if choice in {"password", "userpass"}:
+        remote_password_login(
+            base_url=base_url or None,
+            username=username or None,
+            save=True,
+        )
+        return
+    remote_login(base_url=base_url or None, api_key=api_key or None, save=True)
+
+
 @app.command()
 def remote_health_check(
     base_url: str = "",
     api_key: str = "",
 ):
     remote_health(base_url=base_url or None, api_key=api_key or None)
+
+
+@app.command("remote-login")
+def remote_login_setup(
+    base_url: str = "",
+    api_key: str = "",
+    no_save: bool = False,
+):
+    remote_login(
+        base_url=base_url or None,
+        api_key=api_key or None,
+        save=not no_save,
+    )
+
+
+@app.command("remote-password-login")
+def remote_password_login_setup(
+    base_url: str = "",
+    username: str = "",
+    password: str = "",
+    no_save: bool = False,
+):
+    remote_password_login(
+        base_url=base_url or None,
+        username=username or None,
+        password=password or None,
+        save=not no_save,
+    )
+
+
+@app.command("remote-device-login")
+def remote_device_login_setup(
+    base_url: str = "",
+    client_name: str = "aicli",
+    username: str = "",
+    password: str = "",
+    poll_timeout: int = 180,
+    no_save: bool = False,
+):
+    remote_device_login(
+        base_url=base_url or None,
+        client_name=client_name,
+        username=username or None,
+        password=password or None,
+        poll_timeout=poll_timeout,
+        save=not no_save,
+    )
+
+
+@app.command("remote-logout")
+def remote_logout_clear(
+    clear_base_url: bool = False,
+):
+    remote_logout(clear_base_url=clear_base_url)
+
+
+@app.command("remote-whoami")
+def remote_whoami_check(
+    base_url: str = "",
+    api_key: str = "",
+):
+    remote_whoami(base_url=base_url or None, api_key=api_key or None)
+
+
+@app.command("remote-config")
+def remote_config(
+    base_url: str = "",
+    api_key: str = "",
+):
+    remote_config_show(base_url=base_url or None, api_key=api_key or None)
+
+
+@app.command("remote-token-refresh")
+def remote_refresh(
+    base_url: str = "",
+):
+    remote_token_refresh(base_url=base_url or None)
 
 
 @app.command()
@@ -165,6 +274,7 @@ def remote_agent(
     goal: str,
     max_steps: int = 0,
     async_mode: bool = False,
+    workspace_path: str = ".",
     base_url: str = "",
     api_key: str = "",
 ):
@@ -172,6 +282,7 @@ def remote_agent(
         goal=goal,
         max_steps=max_steps if max_steps > 0 else None,
         async_mode=async_mode,
+        workspace_path=workspace_path,
         base_url=base_url or None,
         api_key=api_key or None,
     )
@@ -217,5 +328,10 @@ def remote_job_stream_logs(
         api_key=api_key or None,
     )
 
-if __name__ == "__main__":
+
+def cli():
     app()
+
+
+if __name__ == "__main__":
+    cli()

@@ -77,6 +77,13 @@ class ApiContractTests(unittest.TestCase):
         app = server.create_app()
         route_paths = {route.path for route in app.routes}
         self.assertIn("/health", route_paths)
+        self.assertIn("/auth/login", route_paths)
+        self.assertIn("/auth/device/start", route_paths)
+        self.assertIn("/auth/device/verify", route_paths)
+        self.assertIn("/auth/device/token", route_paths)
+        self.assertIn("/auth/refresh", route_paths)
+        self.assertIn("/auth/logout", route_paths)
+        self.assertIn("/auth/whoami", route_paths)
         self.assertIn("/analyze", route_paths)
         self.assertIn("/fix/file", route_paths)
         self.assertIn("/fix/project", route_paths)

@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 from core.agent import (
     MAX_STEPS,
@@ -10,6 +11,7 @@ from core.agent import (
 )
 from providers.ollama_provider import ask_coder
 from utils.code_analyzer import analyze_project as analyze_project_issues
+from utils.path_guard import WorkspacePathError, resolve_in_workspace
 from utils.project_scanner import scan_project
 
 
@@ -33,9 +35,35 @@ def _project_goal_with_plan(goal, project_details=None, auto_plan=True):
     return f"{brief}\n\nImplementation plan to follow:\n{plan}", plan
 
 
-def run_agent_goal(goal, project_details=None, max_steps=None, auto_plan=True, on_event=None):
+@contextmanager
+def _chdir(path):
+    prev = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
+def run_agent_goal(
+    goal,
+    project_details=None,
+    max_steps=None,
+    auto_plan=True,
+    on_event=None,
+    workspace_path=None,
+):
     if not goal or not goal.strip():
         return {"ok": False, "error": "Goal is required."}
+
+    try:
+        safe_workspace = resolve_in_workspace(
+            workspace_path or ".",
+            require_exists=True,
+            require_dir=True,
+        )
+    except WorkspacePathError as e:
+        return {"ok": False, "error": str(e)}
 
     effective_steps = max_steps if isinstance(max_steps, int) and max_steps > 0 else MAX_STEPS
     prompt_goal, plan_text = _project_goal_with_plan(
@@ -54,46 +82,48 @@ def run_agent_goal(goal, project_details=None, max_steps=None, auto_plan=True, o
             "goal": goal,
             "max_steps": effective_steps,
             "project_plan": plan_text,
+            "workspace_path": safe_workspace,
         },
     )
 
-    for step_index in range(effective_steps):
-        step_number = step_index + 1
-        _emit(on_event, {"type": "step_started", "step": step_number, "max_steps": effective_steps})
+    with _chdir(safe_workspace):
+        for step_index in range(effective_steps):
+            step_number = step_index + 1
+            _emit(on_event, {"type": "step_started", "step": step_number, "max_steps": effective_steps})
 
-        analysis_results = analyze_project_issues(".", use_llm=False, refresh=False)
-        issue_paths = {
-            result["path"]
-            for result in analysis_results
-            if any(
-                issue.get("severity") in {"error", "warning"}
-                for issue in result.get("issues", [])
+            analysis_results = analyze_project_issues(".", use_llm=False, refresh=False)
+            issue_paths = {
+                result["path"]
+                for result in analysis_results
+                if any(
+                    issue.get("severity") in {"error", "warning"}
+                    for issue in result.get("issues", [])
+                )
+            }
+            issues_summary = _issue_context(analysis_results)
+            _emit(
+                on_event,
+                {
+                    "type": "analysis_ready",
+                    "step": step_number,
+                    "files_scanned": len(analysis_results),
+                    "files_with_issues": len(issue_paths),
+                },
             )
-        }
-        issues_summary = _issue_context(analysis_results)
-        _emit(
-            on_event,
-            {
-                "type": "analysis_ready",
-                "step": step_number,
-                "files_scanned": len(analysis_results),
-                "files_with_issues": len(issue_paths),
-            },
-        )
 
-        files = scan_project(".")
-        prioritized = []
-        for file_info in files:
-            rel = os.path.relpath(os.path.abspath(file_info["path"]), os.getcwd())
-            priority = 0 if rel in issue_paths else 1
-            prioritized.append((priority, rel, file_info))
-        prioritized.sort(key=lambda x: (x[0], x[1]))
+            files = scan_project(".")
+            prioritized = []
+            for file_info in files:
+                rel = os.path.relpath(os.path.abspath(file_info["path"]), os.getcwd())
+                priority = 0 if rel in issue_paths else 1
+                prioritized.append((priority, rel, file_info))
+            prioritized.sort(key=lambda x: (x[0], x[1]))
 
-        context = ""
-        for _, _, file_info in prioritized[:25]:
-            context += f"\nFILE:{file_info['path']}\n{file_info['content'][:500]}\n"
+            context = ""
+            for _, _, file_info in prioritized[:25]:
+                context += f"\nFILE:{file_info['path']}\n{file_info['content'][:500]}\n"
 
-        prompt = f"""
+            prompt = f"""
 You are an AI coding agent.
 
 Goal:
@@ -119,71 +149,72 @@ run_shell
 If the task is already complete, return:
 []
 """
-        result = ask_coder(prompt)
-        _emit(
-            on_event,
-            {
-                "type": "model_output_received",
-                "step": step_number,
-                "preview": result[:400],
-                "length": len(result),
-            },
-        )
-        plan = parse_json(result)
-
-        if plan == []:
-            status = "completed"
-            _emit(on_event, {"type": "step_completed", "step": step_number, "status": status})
-            break
-
-        if not isinstance(plan, list):
-            status = "failed_invalid_plan"
+            result = ask_coder(prompt)
             _emit(
                 on_event,
                 {
-                    "type": "agent_failed",
+                    "type": "model_output_received",
                     "step": step_number,
+                    "preview": result[:400],
+                    "length": len(result),
+                },
+            )
+            plan = parse_json(result)
+
+            if plan == []:
+                status = "completed"
+                _emit(on_event, {"type": "step_completed", "step": step_number, "status": status})
+                break
+
+            if not isinstance(plan, list):
+                status = "failed_invalid_plan"
+                _emit(
+                    on_event,
+                    {
+                        "type": "agent_failed",
+                        "step": step_number,
+                        "status": status,
+                        "error": "No valid plan returned by model.",
+                    },
+                )
+                return {
+                    "ok": False,
                     "status": status,
                     "error": "No valid plan returned by model.",
-                },
-            )
-            return {
-                "ok": False,
-                "status": status,
-                "error": "No valid plan returned by model.",
-                "model_output": result,
-                "execution_log": execution_log,
-                "project_plan": plan_text,
-            }
+                    "model_output": result,
+                    "execution_log": execution_log,
+                    "project_plan": plan_text,
+                    "workspace_path": safe_workspace,
+                }
 
-        if plan == previous_plan:
-            status = "completed_repeated_plan"
+            if plan == previous_plan:
+                status = "completed_repeated_plan"
+                _emit(
+                    on_event,
+                    {
+                        "type": "step_completed",
+                        "step": step_number,
+                        "status": status,
+                    },
+                )
+                break
+            previous_plan = plan
+
+            _emit(on_event, {"type": "plan_received", "step": step_number, "actions": len(plan)})
+            executed = execute_plan(plan, workspace_root=safe_workspace)
+            execution_log.extend(executed)
             _emit(
                 on_event,
                 {
-                    "type": "step_completed",
+                    "type": "actions_executed",
                     "step": step_number,
-                    "status": status,
+                    "executed_count": len(executed),
+                    "executed": executed,
                 },
             )
-            break
-        previous_plan = plan
-
-        _emit(on_event, {"type": "plan_received", "step": step_number, "actions": len(plan)})
-        executed = execute_plan(plan)
-        execution_log.extend(executed)
-        _emit(
-            on_event,
-            {
-                "type": "actions_executed",
-                "step": step_number,
-                "executed_count": len(executed),
-                "executed": executed,
-            },
-        )
-    else:
-        status = "max_steps_reached"
-        _emit(on_event, {"type": "agent_warning", "status": status})
+        else:
+            status = "max_steps_reached"
+            _emit(on_event, {"type": "agent_warning", "status": status})
 
     _emit(
         on_event,
@@ -201,4 +232,5 @@ If the task is already complete, return:
         "goal": goal,
         "project_plan": plan_text,
         "execution_log": execution_log,
+        "workspace_path": safe_workspace,
     }

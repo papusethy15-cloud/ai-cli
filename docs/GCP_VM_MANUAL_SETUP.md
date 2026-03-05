@@ -23,6 +23,16 @@ Set API environment values:
 export AI_CLI_API_KEY="CHANGE_ME_STRONG_KEY"
 export AI_CLI_API_HOST="0.0.0.0"
 export AI_CLI_API_PORT="8787"
+export AI_CLI_WORKSPACE_ROOT="/home/paleienterprises43/workspaces"
+export AI_CLI_AUTH_USERS_JSON='{"devuser":{"password":"CHANGE_ME_PASSWORD","scopes":["read","write","agent"]}}'
+export AI_CLI_AUTH_STATE_PERSIST=true
+export AI_CLI_AUTH_STATE_BACKEND=sqlite
+export AI_CLI_AUTH_DB_PATH="/home/paleienterprises43/ai-cli/.ai_cli_auth.db"
+# Multi-instance option:
+# export AI_CLI_AUTH_STATE_BACKEND=redis
+# export AI_CLI_AUTH_REDIS_URL="redis://127.0.0.1:6379/0"
+# export AI_CLI_AUTH_REDIS_PREFIX="aicli:auth"
+# export AI_CLI_AUTH_REDIS_LOCK_TTL_MS=15000
 ```
 
 Ensure Ollama is running on VM (required for LLM tasks):
@@ -80,9 +90,18 @@ source ~/.bashrc
 ## D) Test Remote Access
 
 ```bash
+aicli setup --mode device --base-url http://127.0.0.1:8787 --username devuser
+aicli setup --mode password --base-url http://127.0.0.1:8787 --username devuser
+aicli setup --mode api-key --base-url http://127.0.0.1:8787 --api-key "CHANGE_ME_STRONG_KEY"
+aicli remote-login
+aicli remote-password-login --username devuser
+aicli remote-device-login --username devuser
+aicli remote-whoami
+aicli remote-config
 aicli remote-health-check
 aicli remote-memory-cache stats
 aicli remote-analyze-project /home/paleienterprises43/ai-cli --no-use-llm
+aicli remote-agent "build todo api" --workspace-path /home/paleienterprises43/ai-cli --async-mode
 ```
 
 ## E) systemd Service (API Auto Start)
@@ -119,6 +138,7 @@ journalctl -u aicli-api -f
 - Verify service status and logs.
 - Verify API key header is sent.
 - If no tunnel, verify firewall for TCP 8787.
+- Verify `AI_CLI_WORKSPACE_ROOT` points to an existing directory.
 
 ### Model errors
 - Ensure Ollama is running on VM:

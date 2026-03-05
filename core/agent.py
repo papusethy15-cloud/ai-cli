@@ -10,6 +10,7 @@ from utils.code_analyzer import analyze_project as analyze_project_issues
 from utils.project_scanner import scan_project
 from utils.file_writer import write_file
 from utils.file_editor import edit_file
+from utils.path_guard import WorkspacePathError, resolve_in_workspace
 from utils.shell_runner import run_shell
 
 import json
@@ -291,7 +292,7 @@ If the task is already complete, return:
             break
         previous_plan = plan
 
-        execution_log.extend(execute_plan(plan))
+        execution_log.extend(execute_plan(plan, workspace_root=os.getcwd()))
     else:
         status = "max_steps_reached"
 
@@ -336,11 +337,11 @@ def parse_json(result):
     return None
 
 
-def execute_plan(plan):
+def execute_plan(plan, workspace_root="."):
     executed = []
+    root = os.path.abspath(workspace_root)
 
     for step in plan:
-
         if not isinstance(step, dict):
             print(f"[Agent] invalid step: {step!r}")
             executed.append({"action": "invalid", "status": "skipped"})
@@ -349,39 +350,86 @@ def execute_plan(plan):
         action = step.get("action")
 
         if action == "create_file":
-
             path = step.get("path")
             content = step.get("content")
             if not path or content is None:
                 print(f"[Agent] invalid create_file step: {step!r}")
                 executed.append({"action": action, "status": "skipped"})
                 continue
-            write_file(path, content)
-            executed.append({"action": action, "status": "done", "path": path})
+            try:
+                safe_path = resolve_in_workspace(path, workspace_root=root)
+            except WorkspacePathError as e:
+                print(f"[Agent] blocked create_file path: {e}")
+                executed.append(
+                    {
+                        "action": action,
+                        "status": "skipped",
+                        "path": path,
+                        "error": str(e),
+                    }
+                )
+                continue
+            saved = write_file(safe_path, content)
+            executed.append(
+                {
+                    "action": action,
+                    "status": "done" if saved else "failed",
+                    "path": os.path.relpath(safe_path, root),
+                }
+            )
 
         elif action == "edit_file":
-
             path = step.get("path")
             content = step.get("content")
             if not path or content is None:
                 print(f"[Agent] invalid edit_file step: {step!r}")
                 executed.append({"action": action, "status": "skipped"})
                 continue
-            edit_file(path, content)
-            executed.append({"action": action, "status": "done", "path": path})
+            try:
+                safe_path = resolve_in_workspace(
+                    path,
+                    workspace_root=root,
+                    require_exists=True,
+                    require_file=True,
+                )
+            except WorkspacePathError as e:
+                print(f"[Agent] blocked edit_file path: {e}")
+                executed.append(
+                    {
+                        "action": action,
+                        "status": "skipped",
+                        "path": path,
+                        "error": str(e),
+                    }
+                )
+                continue
+            saved = edit_file(safe_path, content)
+            executed.append(
+                {
+                    "action": action,
+                    "status": "done" if saved else "failed",
+                    "path": os.path.relpath(safe_path, root),
+                }
+            )
 
         elif action == "run_shell":
-
             command = step.get("command")
             if not command:
                 print(f"[Agent] invalid run_shell step: {step!r}")
                 executed.append({"action": action, "status": "skipped"})
                 continue
-            run_shell(command)
-            executed.append({"action": action, "status": "done", "command": command})
+            outcome = run_shell(command, cwd=root)
+            executed.append(
+                {
+                    "action": action,
+                    "status": "done" if outcome.get("ok") else "failed",
+                    "command": command,
+                    "returncode": outcome.get("returncode"),
+                    "error": outcome.get("error"),
+                }
+            )
 
         else:
-
             print(f"[Agent] unknown action: {action!r}")
             executed.append({"action": action, "status": "skipped"})
 

@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .env
 .ai_cli_memory.json
+.ai_cli_auth.db
