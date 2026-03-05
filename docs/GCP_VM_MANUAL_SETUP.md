@@ -2,6 +2,12 @@
 
 This guide shows how to run AI CLI API on a Google Cloud VM and use it from your local machine.
 
+## Ollama Placement (Important)
+
+- VM/server mode (this guide): run Ollama on VM only.
+- Local client machine does not need Ollama for `remote-*` commands.
+- Local machine needs Ollama only if you run non-remote commands there.
+
 ## A) VM Setup
 
 ```bash
@@ -17,6 +23,13 @@ Set API environment values:
 export AI_CLI_API_KEY="CHANGE_ME_STRONG_KEY"
 export AI_CLI_API_HOST="0.0.0.0"
 export AI_CLI_API_PORT="8787"
+```
+
+Ensure Ollama is running on VM (required for LLM tasks):
+
+```bash
+ollama serve
+ollama list
 ```
 
 Run API:
@@ -44,6 +57,8 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+Note: Ollama install is not required on local client when using remote API commands.
 
 Optional global alias command:
 

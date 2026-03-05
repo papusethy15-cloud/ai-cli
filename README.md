@@ -8,6 +8,12 @@ AI CLI is a local/remote coding assistant with:
 - HTTP API for remote usage
 - Remote CLI commands for API access
 
+## Ollama Requirement (Important)
+
+- If you run CLI commands directly on a machine (`chat-ai`, `agent`, `fix-code`), that same machine needs Ollama.
+- If you run remote commands (`remote-*`) against a VM API server, only the VM needs Ollama.
+- Local client machine does **not** need Ollama in remote-only usage.
+
 ## 1) Quick Start (Local)
 
 ```bash
@@ -16,7 +22,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Start Ollama in another terminal:
+Start Ollama in another terminal (only for local execution mode):
 
 ```bash
 ollama serve
@@ -61,5 +67,6 @@ python main.py remote-job-stream-logs <JOB_ID> --base-url http://127.0.0.1:8787 
 - Remote `path` values are resolved on the server machine, not your local machine.
 - Keep API key secret.
 - Use SSH tunnel for secure remote access when possible.
+- In remote mode, Ollama must run on the server/VM only.
 
 See full manual deployment guide in `docs/GCP_VM_MANUAL_SETUP.md`.
