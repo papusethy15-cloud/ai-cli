@@ -4,9 +4,11 @@ EXT = [".py",".js",".ts",".json",".html",".css"]
 
 EXCLUDE = ["venv",".git","__pycache__"]
 
-def scan_project(path):
 
-    files = []
+def list_project_files(path, extensions=None):
+
+    extensions = extensions or EXT
+    paths = []
 
     for root, dirs, fs in os.walk(path):
 
@@ -14,20 +16,28 @@ def scan_project(path):
 
         for f in fs:
 
-            if any(f.endswith(e) for e in EXT):
+            if any(f.endswith(e) for e in extensions):
 
-                p = os.path.join(root,f)
+                paths.append(os.path.join(root, f))
 
-                try:
+    return sorted(paths)
 
-                    with open(p,"r",encoding="utf-8") as file:
+def scan_project(path):
 
-                        files.append({
-                            "path":p,
-                            "content":file.read()[:2000]
-                        })
+    files = []
 
-                except:
-                    pass
+    for p in list_project_files(path, extensions=EXT):
+
+        try:
+
+            with open(p,"r",encoding="utf-8") as file:
+
+                files.append({
+                    "path":p,
+                    "content":file.read()[:2000]
+                })
+
+        except Exception:
+            pass
 
     return files
