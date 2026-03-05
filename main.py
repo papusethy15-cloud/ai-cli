@@ -25,6 +25,7 @@ from commands.remote import (
     remote_whoami,
 )
 from commands.analyze import analyze
+from commands.bootstrap import bootstrap_remote_client_setup
 from core.agent import run_agent
 
 app = typer.Typer()
@@ -326,6 +327,27 @@ def remote_job_stream_logs(
         since=since,
         base_url=base_url or None,
         api_key=api_key or None,
+    )
+
+
+@app.command()
+def bootstrap_remote_client(
+    base_url: str = "",
+    api_key: str = "",
+    python_bin: str = "python3",
+    command_name: str = "aicli",
+    shell_rc: str = "",
+    install_command: bool = True,
+    install_editable: bool = True,
+):
+    bootstrap_remote_client_setup(
+        base_url=base_url,
+        api_key=api_key,
+        python_bin=python_bin,
+        command_name=command_name,
+        shell_rc=shell_rc,
+        install_command=install_command,
+        install_editable=install_editable,
     )
 
 

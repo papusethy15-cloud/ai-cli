@@ -50,7 +50,7 @@ python main.py serve-api-server
 
 ## B) Recommended Secure Access (SSH Tunnel)
 
-From your local machine:
+From your local machine (Linux/macOS terminal or Windows PowerShell):
 
 ```bash
 gcloud compute ssh <VM_NAME> --zone <ZONE> -- -L 8787:127.0.0.1:8787
@@ -60,6 +60,8 @@ Use `http://127.0.0.1:8787` on your local machine after tunnel is open.
 
 ## C) Local Client Setup
 
+Linux/macOS:
+
 ```bash
 git clone <REPO_URL> ~/ai-cli-client
 cd ~/ai-cli-client
@@ -68,22 +70,34 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Windows (PowerShell):
+
+```powershell
+git clone <REPO_URL> $HOME\ai-cli-client
+cd $HOME\ai-cli-client
+py -3 -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
 Note: Ollama install is not required on local client when using remote API commands.
 
-Optional global alias command:
+Optional one-command bootstrap (recommended, works on Linux/macOS and Windows):
 
 ```bash
-mkdir -p ~/.local/bin
-cat > ~/.local/bin/aicli <<'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
-source "$HOME/ai-cli-client/venv/bin/activate"
-exec python "$HOME/ai-cli-client/main.py" "$@"
-EOS
-chmod +x ~/.local/bin/aicli
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-echo 'export AI_CLI_REMOTE_URL="http://127.0.0.1:8787"' >> ~/.bashrc
-echo 'export AI_CLI_REMOTE_API_KEY="CHANGE_ME_STRONG_KEY"' >> ~/.bashrc
+python3 main.py bootstrap-remote-client --base-url http://127.0.0.1:8787 --api-key "CHANGE_ME_STRONG_KEY"
+```
+
+Windows PowerShell bootstrap:
+
+```powershell
+py -3 main.py bootstrap-remote-client --base-url http://127.0.0.1:8787 --api-key "CHANGE_ME_STRONG_KEY"
+if (Test-Path $PROFILE) { . $PROFILE }
+```
+
+Linux/macOS shell refresh:
+
+```bash
 source ~/.bashrc
 ```
 
@@ -104,7 +118,16 @@ aicli remote-analyze-project /home/paleienterprises43/ai-cli --no-use-llm
 aicli remote-agent "build todo api" --workspace-path /home/paleienterprises43/ai-cli --async-mode
 ```
 
+Windows workspace path example:
+
+```powershell
+aicli remote-analyze-project C:\workspaces\ai-cli --no-use-llm
+aicli remote-agent "build todo api" --workspace-path C:\workspaces\ai-cli --async-mode
+```
+
 ## E) systemd Service (API Auto Start)
+
+This section is Linux-only (systemd is not available on Windows).
 
 Copy template files:
 
