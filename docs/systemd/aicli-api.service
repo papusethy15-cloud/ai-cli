@@ -1,0 +1,15 @@
+[Unit]
+Description=AI CLI API Server
+After=network.target
+
+[Service]
+Type=simple
+User=paleienterprises43
+WorkingDirectory=/home/paleienterprises43/ai-cli
+EnvironmentFile=/etc/default/aicli-api
+ExecStart=/home/paleienterprises43/ai-cli/venv/bin/python /home/paleienterprises43/ai-cli/main.py serve-api-server
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
