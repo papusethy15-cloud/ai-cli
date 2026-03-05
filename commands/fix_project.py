@@ -1,55 +1,43 @@
-import os
-
-from commands.fix import fix_file_for_project
-from utils.code_analyzer import analyze_project
-
-
-def _has_actionable_issues(result):
-    issues = result.get("issues", [])
-    return any(issue.get("severity") in {"error", "warning"} for issue in issues)
+from services.fix_service import run_project_fix
 
 
 def fix_project(path, apply=False, use_llm=False, refresh=False, max_files=20):
-    target = os.path.abspath(path)
-    if not os.path.isdir(target):
-        print(f"Path not found: {path}")
+    response = run_project_fix(
+        path,
+        apply=apply,
+        use_llm=use_llm,
+        refresh=refresh,
+        max_files=max_files,
+    )
+    if not response.get("ok"):
+        print(response.get("error", "Unknown project fix error"))
         return
 
-    analysis = analyze_project(target, use_llm=use_llm, refresh=refresh)
-    candidates = [r for r in analysis if _has_actionable_issues(r)]
-
-    if not candidates:
+    status = response.get("status")
+    if status == "no_actionable_issues":
         print("No actionable issues found.")
         return
 
-    selected = candidates[:max_files]
-    if not apply:
+    if status == "dry_run_ready":
         print("Dry-run mode (no file writes).")
-        for result in selected:
-            print(f"- Would fix: {result['path']} ({len(result.get('issues', []))} issues)")
-        print(f"Selected files: {len(selected)} of {len(candidates)}")
+        for item in response.get("selected_files", []):
+            print(f"- Would fix: {item['path']} ({item['issue_count']} issues)")
+        summary = response.get("summary", {})
+        print(f"Selected files: {summary.get('selected', 0)} of {summary.get('total_actionable', 0)}")
         print("Re-run with --apply to save fixes.")
         return
 
-    saved = 0
-    failed = 0
-    for result in selected:
-        response = fix_file_for_project(
-            result["path"],
-            apply=True,
-            refresh=refresh,
-        )
-        if response["status"] == "saved":
-            saved += 1
+    for item in response.get("selected_files", []):
+        if item.get("ok"):
             print(
-                f"[Saved] {response['file']} | Remaining issues: "
-                f"{response['remaining_issues']}"
+                f"[Saved] {item['file']} | Remaining issues: "
+                f"{item.get('remaining_issues', 0)}"
             )
         else:
-            failed += 1
-            print(f"[Failed] {response['file']} | {response.get('error', 'unknown error')}")
+            print(f"[Failed] {item['file']} | {item.get('error', 'unknown error')}")
 
+    summary = response.get("summary", {})
     print("\n=== FIX PROJECT SUMMARY ===")
-    print(f"Selected files: {len(selected)}")
-    print(f"Saved: {saved}")
-    print(f"Failed: {failed}")
+    print(f"Selected files: {summary.get('selected', 0)}")
+    print(f"Saved: {summary.get('saved', 0)}")
+    print(f"Failed: {summary.get('failed', 0)}")

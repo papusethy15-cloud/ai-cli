@@ -1,6 +1,4 @@
-import os
-
-from utils.code_analyzer import analyze_file, analyze_project
+from services.analyze_service import run_analysis
 
 
 def _print_file_report(result):
@@ -21,47 +19,24 @@ def _print_file_report(result):
         )
 
 
-def _summarize(results):
-    total = len(results)
-    with_issues = sum(1 for r in results if r.get("issues"))
-    cached = sum(1 for r in results if r.get("from_cache"))
-    by_severity = {"error": 0, "warning": 0, "info": 0}
-    for result in results:
-        for issue in result.get("issues", []):
-            sev = issue.get("severity", "info")
-            if sev not in by_severity:
-                by_severity[sev] = 0
-            by_severity[sev] += 1
+def _print_summary(summary):
+    by_severity = summary.get("issues_by_severity", {})
     print("\n=== SUMMARY ===")
-    print(f"Files scanned: {total}")
-    print(f"Files with issues: {with_issues}")
-    print(f"Loaded from memory: {cached}")
+    print(f"Files scanned: {summary.get('files_scanned', 0)}")
+    print(f"Files with issues: {summary.get('files_with_issues', 0)}")
+    print(f"Loaded from memory: {summary.get('from_memory', 0)}")
     print(
         f"Issues by severity: error={by_severity.get('error', 0)}, "
-        f"warning={by_severity.get('warning', 0)}, "
-        f"info={by_severity.get('info', 0)}"
+        f"warning={by_severity.get('warning', 0)}, info={by_severity.get('info', 0)}"
     )
 
 
 def analyze(path, use_llm=True, refresh=False):
-    """
-    Advanced analyzer:
-    - File path -> analyze one file.
-    - Directory path -> analyze each code file and cache results in memory.
-    """
-    target = os.path.abspath(path)
-
-    if os.path.isfile(target):
-        result = analyze_file(target, use_llm=use_llm, refresh=refresh)
-        _print_file_report(result)
-        _summarize([result])
+    response = run_analysis(path, use_llm=use_llm, refresh=refresh)
+    if not response.get("ok"):
+        print(response.get("error", "Unknown analysis error"))
         return
 
-    if not os.path.isdir(target):
-        print(f"Path not found: {path}")
-        return
-
-    results = analyze_project(target, use_llm=use_llm, refresh=refresh)
-    for result in results:
+    for result in response.get("results", []):
         _print_file_report(result)
-    _summarize(results)
+    _print_summary(response.get("summary", {}))

@@ -15,3 +15,13 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 REQUEST_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "180"))
 # Keep model loaded between requests to reduce repeated cold starts.
 OLLAMA_KEEP_ALIVE = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
+
+# API server settings.
+API_HOST = os.getenv("AI_CLI_API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("AI_CLI_API_PORT", "8787"))
+API_KEY = os.getenv("AI_CLI_API_KEY", "")
+API_REQUEST_TIMEOUT_SECONDS = int(os.getenv("AI_CLI_API_REQUEST_TIMEOUT_SECONDS", "180"))
+
+# Remote CLI client defaults.
+REMOTE_API_BASE_URL = os.getenv("AI_CLI_REMOTE_URL", f"http://127.0.0.1:{API_PORT}")
+REMOTE_API_KEY = os.getenv("AI_CLI_REMOTE_API_KEY", API_KEY)
