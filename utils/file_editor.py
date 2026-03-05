@@ -1,14 +1,18 @@
-import os
+from pathlib import Path
 
-def edit_file(path, content):
 
-    if not os.path.exists(path):
+def edit_file(path, content, encoding="utf-8"):
+    target = Path(path)
 
+    if not target.exists() or not target.is_file():
         print(f"[AI] file not found: {path}")
-        return
+        return False
 
-    with open(path, "w", encoding="utf-8") as f:
-
-        f.write(content)
+    try:
+        target.write_text(content, encoding=encoding)
+    except OSError as e:
+        print(f"[AI] failed to update file: {path} ({e})")
+        return False
 
     print(f"[AI] updated file: {path}")
+    return True

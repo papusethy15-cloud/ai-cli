@@ -1,15 +1,10 @@
-import os
 import re
 
 from config import OUTPUT_MODEL
 from providers.ollama_provider import ask_llm
 from utils.code_analyzer import analyze_file
+from utils.file_reader import FileReadError, read_file
 from utils.file_writer import write_file
-
-
-def _read_text(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 def _extract_code(text):
@@ -28,10 +23,11 @@ def _python_is_valid(code, path):
 
 
 def _generate_fix(file, refresh=False):
-    if not os.path.exists(file):
-        return {"ok": False, "error": f"File not found: {file}"}
+    try:
+        code = read_file(file)
+    except FileReadError as e:
+        return {"ok": False, "error": f"[Fix Error] {e}"}
 
-    code = _read_text(file)
     analysis = analyze_file(file, use_llm=False, refresh=refresh)
     issues = analysis.get("issues", [])
     issues_text = _issues_text(issues)

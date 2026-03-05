@@ -1,5 +1,6 @@
 import hashlib
 import json
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,12 +23,29 @@ def load_memory():
 
     if not isinstance(data, dict) or "files" not in data:
         return _empty_memory()
+    if not isinstance(data.get("files"), dict):
+        return _empty_memory()
     return data
 
 
 def save_memory(memory):
-    with MEMORY_FILE.open("w", encoding="utf-8") as f:
-        json.dump(memory, f, indent=2, ensure_ascii=True)
+    payload = memory if isinstance(memory, dict) else _empty_memory()
+    payload.setdefault("version", 1)
+    payload.setdefault("files", {})
+    if not isinstance(payload["files"], dict):
+        payload["files"] = {}
+
+    MEMORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        delete=False,
+        dir=str(MEMORY_FILE.parent),
+    ) as tmp:
+        json.dump(payload, tmp, indent=2, ensure_ascii=True)
+        tmp_path = Path(tmp.name)
+
+    tmp_path.replace(MEMORY_FILE)
 
 
 def get_content_hash(content):

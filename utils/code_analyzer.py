@@ -2,6 +2,7 @@ import ast
 import json
 import os
 import re
+from pathlib import Path
 
 from config import ANALYSIS_MODEL
 from providers.ollama_provider import ask_llm
@@ -13,14 +14,10 @@ from utils.analysis_memory import (
     save_memory,
     set_cached_analysis,
 )
+from utils.file_reader import FileReadError, read_file
 from utils.project_scanner import list_project_files
 
 CODE_EXTENSIONS = [".py", ".js", ".ts", ".json", ".html", ".css"]
-
-
-def _read_text(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read()
 
 
 def _normalize_path(path):
@@ -147,8 +144,14 @@ CODE:
     for item in parsed:
         if not isinstance(item, dict):
             continue
-        severity = item.get("severity", "info")
+        severity = str(item.get("severity", "info")).lower().strip()
+        if severity not in {"error", "warning", "info"}:
+            severity = "info"
         line = item.get("line")
+        if isinstance(line, str) and line.isdigit():
+            line = int(line)
+        if not isinstance(line, int):
+            line = None
         message = item.get("message", "LLM reported an issue.")
         issues.append(_issue("llm_issue", severity, message, line=line, source="llm"))
     return issues
@@ -157,8 +160,8 @@ CODE:
 def analyze_file(path, use_llm=True, refresh=False, memory=None):
     rel_path = _normalize_path(path)
     try:
-        code = _read_text(path)
-    except Exception as e:
+        code = read_file(path)
+    except FileReadError as e:
         return {
             "path": rel_path,
             "issues": [
@@ -185,11 +188,21 @@ def analyze_file(path, use_llm=True, refresh=False, memory=None):
             }
 
     issues = []
-    if path.endswith(".py"):
+    if Path(path).suffix.lower() == ".py":
         issues.extend(_python_static_issues(code))
 
     if use_llm:
-        issues.extend(_llm_issues(rel_path, code))
+        try:
+            issues.extend(_llm_issues(rel_path, code))
+        except Exception as e:
+            issues.append(
+                _issue(
+                    "analyzer_error",
+                    "info",
+                    f"LLM analyzer failed: {e}",
+                    source="llm",
+                )
+            )
 
     analysis = {"issues": issues}
     set_cached_analysis(local_memory, rel_path, content_hash, use_llm, analysis)

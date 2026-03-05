@@ -1,10 +1,14 @@
 from providers.ollama_provider import ask_llm
-from utils.file_reader import read_file
+from utils.file_reader import FileReadError, read_file
 from config import ANALYSIS_MODEL
 
 def explain(file):
 
-    code = read_file(file)
+    try:
+        code = read_file(file)
+    except FileReadError as e:
+        print(f"[Explain Error] {e}")
+        return
 
     prompt = f"""
 Explain this code clearly.
